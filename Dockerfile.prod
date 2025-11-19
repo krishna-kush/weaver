@@ -1,0 +1,110 @@
+# Production Dockerfile for Killcode Weaver
+# Multi-stage build with cross-compilation support
+
+# Stage 1: Build dependencies
+FROM --platform=linux/amd64 rust:1.91-slim AS dependencies
+
+WORKDIR /app
+
+# Install build dependencies
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
+    dpkg --add-architecture i386 && \
+    apt-get update && \
+    apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    g++ \
+    gcc \
+    binutils \
+    cmake \
+    gcc-x86-64-linux-gnu \
+    g++-x86-64-linux-gnu \
+    gcc-arm-linux-gnueabi \
+    g++-arm-linux-gnueabi \
+    gcc-aarch64-linux-gnu \
+    g++-aarch64-linux-gnu \
+    gcc-mips-linux-gnu \
+    g++-mips-linux-gnu \
+    mingw-w64 \
+    gcc-mingw-w64-x86-64 \
+    gcc-mingw-w64-i686
+
+# Copy only dependency manifests
+COPY Cargo.toml Cargo.lock ./
+
+# Build dependencies (cached layer)
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/app/target \
+    mkdir -p src && \
+    echo "pub fn dummy() {}" > src/lib.rs && \
+    echo "fn main() {}" > src/main.rs && \
+    cargo build --release && \
+    rm -rf src
+
+# Stage 2: Build application
+FROM dependencies AS builder
+
+# Copy source code
+COPY . .
+
+# Build release binary
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo build --release && \
+    cp target/release/weaver /app/weaver && \
+    chmod +x /app/weaver
+
+# Stage 3: Runtime image
+FROM --platform=linux/amd64 debian:trixie-slim
+
+WORKDIR /app
+
+# Install runtime dependencies (minimal cross-compilation tools)
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
+    dpkg --add-architecture i386 && \
+    apt-get update && \
+    apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    binutils \
+    gcc-x86-64-linux-gnu \
+    g++-x86-64-linux-gnu \
+    gcc-arm-linux-gnueabi \
+    g++-arm-linux-gnueabi \
+    gcc-aarch64-linux-gnu \
+    g++-aarch64-linux-gnu \
+    gcc-mips-linux-gnu \
+    g++-mips-linux-gnu \
+    mingw-w64 \
+    gcc-mingw-w64-x86-64 \
+    gcc-mingw-w64-i686 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user for security
+RUN useradd -m -u 1000 -s /bin/bash killcode && \
+    mkdir -p /tmp/weaver && \
+    chown -R killcode:killcode /app /tmp/weaver
+
+# Copy binary from builder
+COPY --from=builder --chown=killcode:killcode /app/weaver /app/weaver
+
+# Switch to non-root user
+USER killcode
+
+# Expose port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD ["/usr/bin/curl", "-f", "http://localhost:8080/health", "||", "exit", "1"]
+
+# Run the weaver
+CMD ["/app/weaver"]

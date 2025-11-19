@@ -1,0 +1,27 @@
+/target
+
+# Auto-generated test binaries (can be rebuilt from source)
+# Ignore ALL binaries in fixtures/binaries directory
+tests/fixtures/binaries/*
+!tests/fixtures/binaries/.gitkeep
+
+# Old test binaries directory (deprecated)
+tests/binaries/test_base
+tests/binaries/test_overload
+tests/binaries/test_base_c
+tests/binaries/test_overload_c
+tests/binaries/test_base_rust
+tests/binaries/test_overload_rust
+tests/binaries/test_base_go
+tests/binaries/test_overload_go
+tests/binaries/test_first
+tests/binaries/test_second
+
+# Documentation (keep only README.md)
+*.md
+!README.md
+
+# Temporary files
+*.tmp
+*.swp
+*~
