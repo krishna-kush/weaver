@@ -1,8 +1,8 @@
 # Production Dockerfile for Killcode Weaver
 # Multi-stage build with cross-compilation support
 
-# Stage 1: Build dependencies
-FROM --platform=linux/amd64 rust:1.91-slim AS dependencies
+# Stage 1: Builder
+FROM --platform=linux/amd64 rust:1.91-slim AS builder
 
 WORKDIR /app
 
@@ -20,22 +20,63 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     gcc \
     binutils \
     cmake \
-    gcc-x86-64-linux-gnu \
-    g++-x86-64-linux-gnu \
-    gcc-arm-linux-gnueabi \
-    g++-arm-linux-gnueabi \
-    gcc-aarch64-linux-gnu \
-    g++-aarch64-linux-gnu \
-    gcc-mips-linux-gnu \
-    g++-mips-linux-gnu \
-    mingw-w64 \
-    gcc-mingw-w64-x86-64 \
-    gcc-mingw-w64-i686
+    mingw-w64
 
-# Copy only dependency manifests
+# Install Rust targets for cross-compilation (prod: all platforms)
+RUN rustup target add x86_64-unknown-linux-gnu i686-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-gnullvm i686-pc-windows-gnullvm aarch64-pc-windows-gnullvm aarch64-apple-darwin x86_64-apple-darwin
+
+# Copy cross-compilation toolchains into image
+COPY --from=osxcross / /osxcross
+COPY --from=llvm-mingw / /llvm-mingw
+
+# Set PATH for cross-compilation tools (needed for stub builds)
+ENV PATH="/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/llvm-mingw/bin:/osxcross/bin"
+
+# Copy only Cargo files first for dependency caching
 COPY Cargo.toml Cargo.lock ./
 
-# Build dependencies (cached layer)
+# Build stubs into /stubs directory
+COPY loader-stub ./loader-stub
+RUN mkdir -p /stubs && \
+    cd loader-stub && \
+    # Update .cargo/config.toml to use container paths for macOS cross-compilation
+    mkdir -p .cargo && \
+    echo '[target.aarch64-apple-darwin]' > .cargo/config.toml && \
+    echo 'linker = "/osxcross/bin/aarch64-apple-darwin25.1-clang"' >> .cargo/config.toml && \
+    echo 'ar = "/osxcross/bin/aarch64-apple-darwin25.1-ar"' >> .cargo/config.toml && \
+    echo '' >> .cargo/config.toml && \
+    echo '[target.x86_64-apple-darwin]' >> .cargo/config.toml && \
+    echo 'linker = "/osxcross/bin/x86_64-apple-darwin25.1-clang"' >> .cargo/config.toml && \
+    echo 'ar = "/osxcross/bin/x86_64-apple-darwin25.1-ar"' >> .cargo/config.toml && \
+    # Build Linux x86_64
+    cargo build --release --target x86_64-unknown-linux-gnu && \
+    cp target/x86_64-unknown-linux-gnu/release/loader-stub /stubs/linux-x86_64-stub && \
+    # Build Linux i686 (x86 32-bit)
+    cargo build --release --target i686-unknown-linux-gnu && \
+    cp target/i686-unknown-linux-gnu/release/loader-stub /stubs/linux-x86-stub && \
+    # Build Linux aarch64
+    cargo build --release --target aarch64-unknown-linux-gnu && \
+    cp target/aarch64-unknown-linux-gnu/release/loader-stub /stubs/linux-aarch64-stub && \
+    # Build Windows x86_64 (with static CRT linking)
+    RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --target x86_64-pc-windows-gnullvm && \
+    cp target/x86_64-pc-windows-gnullvm/release/loader-stub.exe /stubs/windows-x86_64-stub.exe && \
+    # Build Windows i686 (x86 32-bit, with static CRT linking)
+    RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --target i686-pc-windows-gnullvm && \
+    cp target/i686-pc-windows-gnullvm/release/loader-stub.exe /stubs/windows-x86-stub.exe && \
+    # Build Windows aarch64 (with static CRT linking)
+    RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --target aarch64-pc-windows-gnullvm && \
+    cp target/aarch64-pc-windows-gnullvm/release/loader-stub.exe /stubs/windows-aarch64-stub.exe && \
+    # Build macOS aarch64
+    cargo build --release --target aarch64-apple-darwin && \
+    cp target/aarch64-apple-darwin/release/loader-stub /stubs/macos-aarch64-stub && \
+    # Build macOS x86_64
+    cargo build --release --target x86_64-apple-darwin && \
+    cp target/x86_64-apple-darwin/release/loader-stub /stubs/macos-x86_64-stub && \
+    # Cleanup
+    cd .. && \
+    rm -rf loader-stub
+
+# Build weaver dependencies (cached layer)
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
@@ -43,48 +84,30 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     echo "pub fn dummy() {}" > src/lib.rs && \
     echo "fn main() {}" > src/main.rs && \
     cargo build --release && \
-    rm -rf src
+    rm -rf src target/release/weaver* target/release/deps/weaver*
 
-# Stage 2: Build application
-FROM dependencies AS builder
-
-# Copy source code
+# Copy source code and build
 COPY . .
-
-# Build release binary
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     cargo build --release && \
-    cp target/release/weaver /app/weaver && \
-    chmod +x /app/weaver
+    cp target/release/weaver /app/weaver-bin && \
+    chmod +x /app/weaver-bin
 
-# Stage 3: Runtime image
+# Stage 2: Runtime image
 FROM --platform=linux/amd64 debian:trixie-slim
 
 WORKDIR /app
 
-# Install runtime dependencies (minimal cross-compilation tools)
+# Install runtime dependencies
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
-    dpkg --add-architecture i386 && \
     apt-get update && \
     apt-get install -y \
     ca-certificates \
     libssl3 \
-    binutils \
-    gcc-x86-64-linux-gnu \
-    g++-x86-64-linux-gnu \
-    gcc-arm-linux-gnueabi \
-    g++-arm-linux-gnueabi \
-    gcc-aarch64-linux-gnu \
-    g++-aarch64-linux-gnu \
-    gcc-mips-linux-gnu \
-    g++-mips-linux-gnu \
-    mingw-w64 \
-    gcc-mingw-w64-x86-64 \
-    gcc-mingw-w64-i686 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -94,7 +117,7 @@ RUN useradd -m -u 1000 -s /bin/bash killcode && \
     chown -R killcode:killcode /app /tmp/weaver
 
 # Copy binary from builder
-COPY --from=builder --chown=killcode:killcode /app/weaver /app/weaver
+COPY --from=builder --chown=killcode:killcode /app/weaver-bin /app/weaver
 
 # Switch to non-root user
 USER killcode
@@ -102,9 +125,14 @@ USER killcode
 # Expose port
 EXPOSE 8080
 
+# Environment variables
+ENV WEAVER_TEMP_DIR=/tmp/weaver
+ENV RUST_LOG=info
+ENV WEAVER_ENV=production
+
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD ["/usr/bin/curl", "-f", "http://localhost:8080/health", "||", "exit", "1"]
+    CMD curl -f http://localhost:8080/health || exit 1
 
 # Run the weaver
 CMD ["/app/weaver"]

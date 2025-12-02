@@ -20,6 +20,7 @@ pub enum ProgressStep {
     ConvertingToObjects,
     CompilingLoader,
     Linking,
+    Finalizing,
     Complete,
 }
 
@@ -35,6 +36,7 @@ impl ProgressStep {
             ProgressStep::ConvertingToObjects => 60,
             ProgressStep::CompilingLoader => 75,
             ProgressStep::Linking => 85,
+            ProgressStep::Finalizing => 95,
             ProgressStep::Complete => 100,
         }
     }
@@ -50,6 +52,7 @@ impl ProgressStep {
             ProgressStep::ConvertingToObjects => "Converting binaries to object files",
             ProgressStep::CompilingLoader => "Compiling loader",
             ProgressStep::Linking => "Linking everything together",
+            ProgressStep::Finalizing => "Finalizing output binary",
             ProgressStep::Complete => "Merge complete",
         }
     }

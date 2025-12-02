@@ -78,32 +78,6 @@ fn test_macos_binary_compatibility() {
 }
 
 #[test]
-fn test_macos_compiler_config() {
-    use weaver::core::binary::CompilerConfig;
-    
-    // Skip if not on macOS and cross-host testing disabled
-    if should_skip_cross_host_test("macos", "x86_64") {
-        println!("⚠️  Skipping macOS compiler test - cross-host testing disabled");
-        return;
-    }
-    
-    let info = BinaryInfo {
-        arch: Architecture::X86_64,
-        os: OperatingSystem::MacOS,
-    };
-    
-    let config = CompilerConfig::for_binary(&info);
-    
-    // macOS uses osxcross or native clang
-    assert!(
-        config.gcc.contains("clang") || config.gcc.contains("darwin"),
-        "macOS should use clang or darwin toolchain, got: {}", config.gcc
-    );
-    
-    println!("✅ macOS compiler configuration verified\n");
-}
-
-#[test]
 fn test_macos_universal_binary_concept() {
     // macOS supports universal binaries (fat binaries with multiple architectures)
     // This test verifies we understand the concept even if not fully implemented

@@ -107,54 +107,6 @@ impl Architecture {
             Architecture::X86 | Architecture::X86_64 | Architecture::ARM | Architecture::AArch64
         )
     }
-
-    pub fn gcc_compiler(&self) -> &'static str {
-        match self {
-            Architecture::X86 => "gcc",
-            Architecture::X86_64 => "x86_64-linux-gnu-gcc",
-            Architecture::ARM => "arm-linux-gnueabi-gcc",
-            Architecture::AArch64 => "aarch64-linux-gnu-gcc",
-            Architecture::MIPS => "mips-linux-gnu-gcc",
-            Architecture::MIPS64 => "mips64-linux-gnuabi64-gcc",
-            _ => "gcc",
-        }
-    }
-
-    pub fn objcopy_arch(&self) -> &'static str {
-        match self {
-            Architecture::X86 => "i386",
-            Architecture::X86_64 => "i386:x86-64",
-            Architecture::ARM => "arm",
-            Architecture::AArch64 => "aarch64",
-            Architecture::MIPS => "mips",
-            Architecture::MIPS64 => "mips:64",
-            _ => "i386",
-        }
-    }
-
-    pub fn objcopy_output(&self) -> &'static str {
-        match self {
-            Architecture::X86 => "elf32-i386",
-            Architecture::X86_64 => "elf64-x86-64",
-            Architecture::ARM => "elf32-littlearm",
-            Architecture::AArch64 => "elf64-littleaarch64",
-            Architecture::MIPS => "elf32-tradbigmips",
-            Architecture::MIPS64 => "elf64-tradbigmips",
-            _ => "elf64-x86-64",
-        }
-    }
-    
-    pub fn objcopy_binary(&self) -> &'static str {
-        match self {
-            Architecture::X86 => "i386",
-            Architecture::X86_64 => "i386:x86-64",
-            Architecture::ARM => "arm",
-            Architecture::AArch64 => "aarch64",
-            Architecture::MIPS => "mips",
-            Architecture::MIPS64 => "mips64",
-            _ => "i386:x86-64",
-        }
-    }
 }
 
 impl fmt::Display for Architecture {
@@ -215,13 +167,5 @@ mod tests {
         assert_eq!(Architecture::detect(&binary_data), Architecture::AArch64);
         assert!(Architecture::AArch64.is_64bit());
         assert!(Architecture::AArch64.is_supported());
-    }
-
-    #[test]
-    fn test_compiler_selection() {
-        assert_eq!(Architecture::X86_64.gcc_compiler(), "x86_64-linux-gnu-gcc");
-        assert_eq!(Architecture::X86.gcc_compiler(), "gcc");
-        assert_eq!(Architecture::AArch64.gcc_compiler(), "aarch64-linux-gnu-gcc");
-        assert_eq!(Architecture::ARM.gcc_compiler(), "arm-linux-gnueabi-gcc");
     }
 }

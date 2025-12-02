@@ -1,0 +1,7 @@
+/target
+/.cargo
+
+# Temporary files
+*.tmp
+*.swp
+*~

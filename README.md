@@ -59,8 +59,8 @@ Weaver is a stateless Rust microservice that merges license enforcement binaries
 
 ### Multi-OS Support
 - Linux (ELF) - Full support
-- Windows (PE) - Merge support
-- macOS (Mach-O) - Detection support
+- Windows (PE) - Full support
+- macOS (Mach-O) - Full support
 
 ### Smart Binary Processing
 - Automatic architecture detection using Goblin
@@ -217,9 +217,69 @@ Weaver automatically detects binary format using Goblin parser:
 **macOS (Mach-O):**
 - Header magic: `0xfeedface`, `0xfeedfacf`, etc.
 - CPU type: x86-64, ARM64
-- Detection only (merge not implemented)
+- Full merge support
 
 ## Merge Process
+
+### V2 Merge (Current - Pre-compiled Rust Stubs)
+
+> ⚠️ **Build Requirement:** `cargo check` and `cargo build` will **NOT work** outside Docker Compose.
+> The V2 merger uses `include_bytes!("/stubs/...")` which requires pre-compiled stubs at `/stubs/` directory.
+> These stubs are built during `docker compose build weaver` and embedded at compile time.
+>
+> **After any change to `loader-stub/` code, you MUST run:**
+> ```bash
+> docker compose build weaver
+> ```
+
+The V2 merge process uses pre-compiled Rust loader stubs instead of runtime C compilation:
+
+1. **Receive & Validate**
+   - Accept base64-encoded binaries
+   - Validate size limits (200MB default)
+   - Extract to temp directory
+
+2. **Binary Analysis**
+   - Parse headers with Goblin
+   - Detect OS and architecture
+   - Validate compatibility (same platform)
+
+3. **Stub Selection**
+   - Select pre-compiled Rust stub matching target OS/Architecture
+   - Stubs are embedded in weaver binary via `include_bytes!`
+   - Supported combinations:
+     - Linux: x86_64, x86, aarch64
+     - Windows: x86_64, x86, aarch64
+     - macOS: x86_64, aarch64
+
+4. **Binary Assembly**
+   - Concatenate: `[Stub] + [Base Binary] + [Overload Binary] + [Footer]`
+   - Footer contains offsets, sizes, and configuration (grace period, sync mode, etc.)
+   - No runtime compilation needed - pure binary concatenation
+
+5. **Footer Structure**
+   ```rust
+   struct ConfigFooter {
+       magic: [u8; 8],                   // "KILLCODE"
+       base_offset: u64,                 // Where base binary starts
+       base_size: u64,                   // Size of base binary
+       overload_offset: u64,             // Where overload binary starts
+       overload_size: u64,               // Size of overload binary
+       grace_period: u32,                // Timeout in seconds
+       sync_mode: u8,                    // 0=async, 1=sync
+       network_failure_kill_count: u32,  // Max failures before kill
+   }
+   ```
+
+6. **Storage & Response**
+   - Store in temp directory with UUID
+   - Cache metadata in memory (HashMap)
+   - Return download URL
+   - Publish progress to Redis
+
+### V1 Merge (Legacy - Runtime C Compilation)
+
+The original merge process using runtime C compilation:
 
 1. **Receive & Validate**
    - Accept base64-encoded binaries
@@ -234,7 +294,7 @@ Weaver automatically detects binary format using Goblin parser:
 3. **Loader Generation**
    - Generate C loader stub with configuration
    - Embed grace period, sync mode, failure threshold
-   - Setup shared memory for health monitoring (V2)
+   - Setup shared memory for health monitoring
 
 4. **Object Conversion**
    - Convert binaries to ELF objects with `objcopy`
@@ -375,36 +435,72 @@ objdump -f base_binary    # For PE
 
 ## Development
 
+> ⚠️ **IMPORTANT: Docker Build Required**
+>
+> Due to V2 merger using pre-compiled stubs via `include_bytes!("/stubs/...")`, you **cannot** run
+> `cargo check` or `cargo build` directly on the host machine. The stubs only exist inside the Docker container.
+>
+> **Always use Docker Compose for building:**
+> ```bash
+> docker compose build weaver
+> ```
+
 ### Building
+
 ```bash
+# ❌ Will NOT work (stubs not found on host)
 cd weaver
 cargo build --release
+
+# ✅ Correct way
+docker compose build weaver
 ```
 
-### Testing
+### Modifying Loader Stub
+
+The loader stub (`weaver/loader-stub/`) is a Rust binary that gets cross-compiled for multiple platforms
+during Docker build. After any changes:
+
 ```bash
-# Unit tests
-cargo test
+# Rebuild weaver (this recompiles all loader stubs)
+docker compose build weaver
+
+# Then restart the service
+docker compose up -d weaver
+```
+
+**Loader stub platforms built:**
+- **Dev build:** Linux x86_64, Windows x86_64, macOS aarch64 (others use dummy stubs)
+- **Prod build:** All 8 platform combinations
+
+### Testing
+
+```bash
+# Unit tests (inside container)
+docker compose exec weaver cargo test
 
 # Integration tests
-cargo test --test integration_test
+docker compose exec weaver cargo test --test integration_test
 
 # With QEMU/Wine (requires setup)
-WEAVER_ENABLE_CROSS_HOST_TESTING=true cargo test
+WEAVER_ENABLE_CROSS_HOST_TESTING=true docker compose exec weaver cargo test
 ```
 
 ### Adding New Architecture
-1. Add toolchain to `Dockerfile.dev`
-2. Update `CompilerConfig` in `src/core/binary/compiler.rs`
-3. Add linker mapping
-4. Test with real binary
+
+1. Add toolchain to `Dockerfile.dev` / `Dockerfile.prod`
+2. Add stub build command in Dockerfile for the new target
+3. Update `v2.rs` with new `include_bytes!` constant
+4. Update `detector/arch.rs` if it's a new architecture type
+5. Rebuild: `docker compose build weaver`
+6. Test with real binary
 
 ## Status
 
 ✅ **Production Ready**
 
-- Linux ELF: Full support (x86-64, ARM64, ARM, x86)
-- Windows PE: Merge support (x86-64, x86)
-- macOS Mach-O: Detection only
+- Linux ELF: Full support (x86_64, x86, aarch64)
+- Windows PE: Full support (x86_64, x86, aarch64)
+- macOS Mach-O: Full support (x86_64, aarch64)
 - Health monitoring: V2 tested and stable
 - All architectures validated with real binaries

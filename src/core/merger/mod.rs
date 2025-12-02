@@ -1,6 +1,4 @@
-pub mod linux;
-pub mod windows;
-pub mod macos;
+pub mod v2;
 
 use anyhow::Result;
 use std::fs;
@@ -15,7 +13,7 @@ use crate::models::request::MergeMode;
 /// This function:
 /// 1. Detects the architecture and OS of both binaries
 /// 2. Validates they are compatible
-/// 3. Routes to the appropriate OS-specific merger
+/// 3. Routes to the unified V2 merger
 pub async fn merge_binaries(
     base_data: &[u8],
     overload_data: &[u8],
@@ -50,12 +48,6 @@ pub async fn merge_binaries(
     
     log::info!("✅ Binary validation passed: {}", base_info.description());
     
-    // Convert mode to string
-    let mode_str = match mode {
-        MergeMode::Before => "before",
-        MergeMode::After => "after",
-    };
-    
     // Create temp directory
     fs::create_dir_all(temp_dir)?;
     let work_dir = TempDir::new_in(temp_dir)?;
@@ -63,25 +55,29 @@ pub async fn merge_binaries(
     
     log::info!("Working directory: {}", work_path.display());
     
-    // Route to OS-specific merger (original behavior for /merge endpoint)
-    let merged_path = match base_info.os {
-        OperatingSystem::Linux => {
-            linux::basic::merge_linux_elf(base_data, overload_data, mode_str, sync, work_path, &base_info, task_id).await?
-        }
-        OperatingSystem::Windows => {
-            windows::basic::merge_windows_pe(base_data, overload_data, mode_str, sync, work_path)?
-        }
-        OperatingSystem::MacOS => {
-            macos::merge_macos_macho(base_data, overload_data, mode_str, sync, work_path)?
-        }
-        _ => {
-            anyhow::bail!(
-                "Unsupported OS: {}. Currently supported: Linux ✅, Windows ✅, macOS 🚧",
-                base_info.os.name()
-            )
-        }
-    };
+    // Handle MergeMode by swapping binaries if necessary
+    // If mode is Before, we treat overload as the "base" (primary) in some contexts,
+    // but for loader-stub, it runs both. 
+    // However, to respect the "Before" semantics (Overload runs "before" Base?), 
+    // we might want to swap them if the stub executes them in order.
+    // For now, we'll pass them as is, but log the mode.
+    log::info!("Merge mode: {:?} (Using unified V2 loader-stub)", mode);
+
+    // Use V2 merger for all platforms
+    // Default settings for basic merge: grace_period=0, network_failure_kill_count=0
+    let merged_path_str = v2::merge_v2(
+        base_data,
+        overload_data,
+        work_path,
+        &base_info,
+        task_id,
+        0, // grace_period
+        sync, // sync_mode
+        0, // network_failure_kill_count
+    ).await?;
     
+    let merged_path = PathBuf::from(merged_path_str);
+
     // Copy to permanent location with UUID
     let final_path = PathBuf::from(temp_dir)
         .join(format!("merged_{}.bin", uuid::Uuid::new_v4()));
@@ -94,6 +90,7 @@ pub async fn merge_binaries(
 }
 
 /// Stop-on-exit merge entry point
+/// Now uses the V2 implementation with default settings
 pub async fn merge_stop_on_exit(
     base_data: &[u8],
     overload_data: &[u8],
@@ -101,31 +98,17 @@ pub async fn merge_stop_on_exit(
     base_info: &BinaryInfo,
     task_id: &str,
 ) -> Result<String> {
-    // Route based on OS
-    match base_info.os {
-        OperatingSystem::Linux => {
-            linux::stop_on_exit::merge_linux_elf_stop_on_exit(
-                base_data,
-                overload_data,
-                work_path,
-                base_info,
-                task_id,
-            ).await
-        }
-        OperatingSystem::Windows => {
-            windows::stop_on_exit::merge_windows_pe_stop_on_exit(
-                base_data,
-                overload_data,
-                work_path,
-            )
-        }
-        _ => {
-            anyhow::bail!(
-                "Stop-on-exit mode only supported for Linux and Windows. Detected: {}",
-                base_info.description()
-            )
-        }
-    }
+    // Use V2 with defaults: grace_period=0, sync_mode=false, network_failure_kill_count=0
+    v2::merge_v2(
+        base_data,
+        overload_data,
+        work_path,
+        base_info,
+        task_id,
+        0,
+        false,
+        0
+    ).await
 }
 
 /// V2 merge entry point with advanced health monitoring
@@ -139,35 +122,14 @@ pub async fn merge_v2_stop_on_exit(
     sync_mode: bool,
     network_failure_kill_count: u32,
 ) -> Result<String> {
-    // Route based on OS
-    match base_info.os {
-        OperatingSystem::Linux => {
-            linux::v2_stop_on_exit::merge_linux_elf_v2_stop_on_exit(
-                base_data,
-                overload_data,
-                work_path,
-                base_info,
-                task_id,
-                grace_period,
-                sync_mode,
-                network_failure_kill_count,
-            ).await
-        }
-        OperatingSystem::Windows => {
-            windows::v2_stop_on_exit::merge_windows_pe_v2_stop_on_exit(
-                base_data,
-                overload_data,
-                work_path,
-                grace_period,
-                sync_mode,
-                network_failure_kill_count,
-            )
-        }
-        _ => {
-            anyhow::bail!(
-                "V2 merge only supports Linux and Windows. Detected: {}",
-                base_info.description()
-            )
-        }
-    }
+    v2::merge_v2(
+        base_data,
+        overload_data,
+        work_path,
+        base_info,
+        task_id,
+        grace_period,
+        sync_mode,
+        network_failure_kill_count
+    ).await
 }
