@@ -86,6 +86,9 @@ pub fn run(
     let base_path = temp_dir.join(format!("base_{}", pid));
     let overload_path = temp_dir.join(format!("overload_{}", pid));
 
+    eprintln!("[KillCode] Writing base binary ({} bytes) to: {}", base_data.len(), base_path.display());
+    eprintln!("[KillCode] Writing overload binary ({} bytes) to: {}", overload_data.len(), overload_path.display());
+
     // Helper to write and make executable
     let write_binary = |path: &PathBuf, data: &[u8]| -> Result<(), std::io::Error> {
         let mut file = File::create(path)?;
@@ -98,6 +101,28 @@ pub fn run(
 
     write_binary(&base_path, &base_data)?;
     write_binary(&overload_path, &overload_data)?;
+
+    // Debug: Check first bytes of overload to see if license is present
+    if overload_data.len() > 100 {
+        // Look for JSON start in first 1MB
+        let search_len = std::cmp::min(overload_data.len(), 1024 * 1024);
+        let mut found_json = false;
+        for i in (0..search_len).step_by(4) {
+            if overload_data[i] == b'{' {
+                // Check if it looks like our license JSON
+                if let Ok(s) = std::str::from_utf8(&overload_data[i..std::cmp::min(i+50, overload_data.len())]) {
+                    if s.contains("license_id") {
+                        eprintln!("[KillCode] Found license JSON in overload at offset 0x{:x}", i);
+                        found_json = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if !found_json {
+            eprintln!("[KillCode] WARNING: No license JSON found in overload binary!");
+        }
+    }
 
     // Helper to execute binary
     // Returns: Ok(Pid) if child started
