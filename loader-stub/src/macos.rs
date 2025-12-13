@@ -102,6 +102,25 @@ pub fn run(
     write_binary(&base_path, &base_data)?;
     write_binary(&overload_path, &overload_data)?;
 
+    // Ad-hoc codesign binaries (required on macOS arm64)
+    // 
+    // On Apple Silicon (M1/M2/M3), ALL executable code must be signed before
+    // it can run - this is enforced at the hardware level. Unlike Intel Macs
+    // where unsigned binaries might run with warnings, arm64 Macs will
+    // immediately SIGKILL any unsigned binary before main() is even reached.
+    //
+    // Ad-hoc signing (--sign -) creates a valid signature without requiring
+    // an Apple Developer certificate. This is sufficient for local execution.
+    // The signature proves the binary hasn't been modified since signing,
+    // even though it doesn't prove who created it.
+    let codesign = |path: &PathBuf| {
+        let _ = std::process::Command::new("codesign")
+            .args(["--sign", "-", "--force", path.to_str().unwrap()])
+            .output();
+    };
+    codesign(&base_path);
+    codesign(&overload_path);
+
     // Helper to execute binary
     // Returns: Ok(Pid) if child started
     let execute_binary = |path: &PathBuf, name: &str| -> Result<Pid, String> {
