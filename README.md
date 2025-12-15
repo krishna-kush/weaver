@@ -1,3 +1,9 @@
+> [!WARNING]
+> **REPOSITORY MOVED**
+>
+> This repository has been shifted to a new location.
+> Please visit the new URL here: **[https://github.com/killcodeio/weaver](https://github.com/killcodeio/weaver)**
+
 # Killcode Weaver
 
 > ⚠️ **IMPORTANT: CURRENT IMPLEMENTATION STATUS**
